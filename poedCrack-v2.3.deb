@@ -1,0 +1,339 @@
+#!/bin/sh
+#
+# poedCrack - v2.3 (2009-11-18)
+# For all devices
+#
+# Now includes fat binary support
+#
+# Heavily based on DeCrypt by FloydianSlip
+#
+# Many thanks to:
+#    puy0, SaladFork, Flox, Flawless, FloydianSlip, MadHouse, TDDebug
+
+echo "poedCrack 2.3 (2009-11-18)"
+echo "by poedgirl"
+echo
+
+if [ ! -e /usr/bin/plutil ]; then
+	echo "Cannot find plutil (Install Erica Utils from Cydia)"
+	exit 1
+fi
+
+if [ ! -e /usr/bin/gdb ]; then
+	echo "Cannot find gdb (Install GNU Debugger from Cydia)"
+	exit 1
+fi
+
+if [ ! -e /usr/bin/otool ]; then
+	echo "Cannot find otool (Install toolchain from Cydia)"
+	exit 1
+fi
+
+if [ ! -e /bin/ps ]; then
+	echo "Cannot find ps (Install BigBoss Recommended Tools from Cydia)"
+	exit 1
+fi
+
+if [ $# -lt 1 ]; then
+	echo "Usage: $(basename $0) <ApplicationName> [<CrackerName>] [<CreditFile>]"
+	echo
+	exit 1
+fi
+
+AppInput=$1
+CrackerName=$2
+CreditFile=$3
+
+if [ ! $CrackerName ]; then
+	CrackerName="Anonymous"
+fi
+
+if [ ! $CreditFile ]; then
+        CreditFile=$CrackerName
+fi
+
+
+if [ -d "$AppInput" ]; then
+        tempLoc=$AppInput
+else
+	echo "Locating $AppInput"
+	tempLoc=$(find /var/mobile/Applications -iname "$AppInput.app")
+	if [ -z "$tempLoc" ]; then
+		echo "Unable to locate $AppInput"
+		exit 1
+	fi
+	AppCount=$(find /var/mobile/Applications -iname "$AppInput.app" | wc -l)
+	if [ $AppCount -gt 1 ]; then
+		echo "Found two installation directories:"
+		find /var/mobile/Applications -iname "$AppInput.app"
+		exit 1
+	fi
+fi
+
+AppPath=$(dirname "$tempLoc")
+AppName=$(basename "$tempLoc")
+AppExec=$(plutil -key CFBundleExecutable "$tempLoc/Info.plist" 2>&1)
+AppVer=$(plutil -key CFBundleVersion "$tempLoc/Info.plist" 2>&1)
+AppDisplayName=$(plutil -key CFBundleDisplayName "$tempLoc/Info.plist" 2>&1)
+
+if [ ! -d "$AppPath" ]; then
+	echo "Unable to locate original installation directory"
+	exit 1
+fi
+
+if [ ! -d "$AppPath/$AppName" ]; then
+	echo "Unable to locate .app directory"
+	exit 1
+fi
+
+if [ ! -e "$AppPath/$AppName/$AppExec" ]; then
+	echo "Unable to locate executable"
+	exit 1
+fi
+
+echo "Found $AppName"
+
+echo "Creating directories"
+WorkDir="/tmp/poedCrack-$(date +%Y%m%d-%H%M%S)"
+NewAppDir="$HOME/Documents/Cracked"
+
+if [ -e "$WorkDir" ]; then
+	rm -rf "$WorkDir"
+fi
+
+mkdir -p "$WorkDir"
+
+if [ ! -e "$NewAppDir" ]; then
+	mkdir -p "$NewAppDir"
+fi
+
+if [ ! -d "$WorkDir" -o ! -d "$NewAppDir" ]; then
+	echo "Unable to create Directories"
+	exit 1
+fi
+
+echo "Copying application files"
+
+cp -a "$AppPath/$AppName/" "$WorkDir/"
+
+if [ ! -e "$WorkDir/$AppName/$AppExec" ]; then
+	echo "Unable to copy application files"
+	rm -fr "$WorkDir"
+	exit 1
+fi
+
+echo "Analyzing application"
+
+LipoFail=$(lipo -info "$WorkDir/$AppName/$AppExec" | grep Architectures | awk '{print $2}')
+if [ ! $LipoFail ]; then
+	echo "Thin Binary found"
+	Iterations=1
+else
+	echo "Fat Binary found"
+	echo "Dumping armv6 section"
+	lipo -thin armv6 "$WorkDir/$AppName/$AppExec" -output "$WorkDir/$AppName/$AppExec-armv6"
+	CPUType=$(sysctl hw.cpusubtype | grep 6 | awk '{print $2}')
+	if [ ! $CPUType ]; then
+		echo "Dumping armv7 section"
+		dd if="$WorkDir/$AppName/$AppExec" of="$WorkDir/$AppName/$AppExec-swapped" bs=1 count=15 >> /dev/null 2>&1> /dev/null
+		echo -en "\011" >> "$WorkDir/$AppName/$AppExec-swapped"
+		dd if="$WorkDir/$AppName/$AppExec" of="$WorkDir/$AppName/$AppExec-swapped" skip=16 bs=1 count=19 oflag=append conv=notrunc >> /dev/null 2>&1> /dev/null
+		echo -en "\006" >> "$WorkDir/$AppName/$AppExec-swapped"
+		dd if="$WorkDir/$AppName/$AppExec" of="$WorkDir/$AppName/$AppExec-swapped" skip=1 bs=36 oflag=append conv=notrunc >> /dev/null 2>&1> /dev/null
+		lipo -thin armv6 "$WorkDir/$AppName/$AppExec-swapped" -output "$WorkDir/$AppName/$AppExec-armv7"
+		rm "$WorkDir/$AppName/$AppExec-swapped"
+		Iterations=2
+	else
+		echo "Non armv7 compatible CPU found, not dumping armv7"
+		Iterations=1
+	fi
+fi
+	
+for (( i=1;i<=$Iterations;i++)); do
+	if [ ! $LipoFail ]; then
+		AppExecCur=$AppExec
+	else 
+		if [ $i -eq 1 ];then
+			AppExecCur=$AppExec-armv6
+			echo 
+			echo "Cracking armv6 section"
+			echo "----------------------"
+		else
+			AppExecCur=$AppExec-armv7
+			echo 
+			echo "Cracking armv7 section"
+			echo "----------------------"
+		fi
+	fi
+	
+	CryptID=$(otool -l "$WorkDir/$AppName/$AppExecCur" | grep cryptid | awk '{print $2}')
+	if [ $CryptID -ne "1" ]; then
+		echo "Application is not encrypted"
+		rm -fr "$WorkDir"
+		exit 1
+	fi
+	
+	CryptSize=$(otool -l "$WorkDir/$AppName/$AppExecCur" | grep cryptsize | awk '{print $2}')
+	if [ ! $CryptSize ]; then
+		echo "Unable to find CryptSize"
+		rm -fr "$WorkDir"
+		exit 1
+	fi
+	
+	CryptOff=$(otool -l "$WorkDir/$AppName/$AppExecCur" | grep cryptoff | awk '{print $2}')
+	if [ ! $CryptOff ]; then
+	        echo "Unable to find CryptOff"
+	        rm -fr "$WorkDir"
+		exit 1
+	fi
+	
+	echo "Locating and patching CryptID"
+	
+	# "/System/Library/Frameworks" in hex
+	PathAsHex="2f53797374656d2f4c6962726172792f4672616d65776f726b73"
+	
+	# - Convert to hex on 1 long line, only take stuff before the path string,
+	# - Convert to 1 byte set per line, find 0x01 (line number is offset in the real file),
+	# - Strip newlines, reverse the order
+	oneLocations=($(od -A n -t x1 -v "$WorkDir/$AppName/$AppExecCur" | \
+		tr -d ' ','\n' | \
+		sed "s/$PathAsHex.*\$//" | \
+		sed "s/../&\n/g" | \
+		grep -n -s 01 | \
+		cut -d : -f 1 | \
+		sort -nr | \
+		tr "\n" " "))
+	
+	for TryOffset in "${oneLocations[@]}"; do
+		cp -a "$WorkDir/$AppName/$AppExecCur" "$WorkDir/$AppName/$AppExecCur.trying"
+		foo=$(echo -ne "\x00" | dd bs=1 seek=$((TryOffset - 1)) conv=notrunc status=noxfer of="$WorkDir/$AppName/$AppExecCur.trying" 2>&1> /dev/null)
+		cid=$(otool -l "$WorkDir/$AppName/$AppExecCur.trying" | grep cryptid | awk '{print $2}')
+		if [ $cid -eq 0 ]; then
+			break
+		fi
+		rm "$WorkDir/$AppName/$AppExecCur.trying"
+	done
+	
+	if [ ! -e "$WorkDir/$AppName/$AppExecCur.trying" ]; then
+		echo "Unable to find CryptID"
+		rm -fr "$WorkDir"
+		exit 1
+	fi
+	
+	mv "$WorkDir/$AppName/$AppExecCur.trying" "$WorkDir/$AppName/$AppExecCur"
+	
+	echo "Dumping unencrypted data from application"
+	
+	echo -e "set sharedlibrary load-rules \".*\" \".*\" none\r\n\
+	set inferior-auto-start-dyld off\r\n\
+	set sharedlibrary preload-libraries off\r\n\
+	set sharedlibrary load-dyld-symbols off\r\n\
+	handle all nostop\r\n\
+	rb doModInitFunctions\r\n
+	command 1\r\n\
+	dump memory $WorkDir/dump.bin 0x2000 $(($CryptSize + 0x2000))\r\n\
+	kill\r\n\
+	quit\r\n\
+	end\r\n\
+	start" > $WorkDir/batch.gdb
+	
+	foo=$(gdb -q -e "$AppPath/$AppName/$AppExecCur" -x $WorkDir/batch.gdb -batch > /dev/null 2>&1> /dev/null)
+	
+	rm $WorkDir/batch.gdb
+	
+	echo "Verifiying data dump"
+	
+	DumpSize=$(stat -c%s "$WorkDir/dump.bin")
+	if [ "$DumpSize" != "$CryptSize" ]; then
+		echo "Memory dump is not the right size or does not exist"
+		rm -fr "$WorkDir"
+		exit 1
+	fi
+	
+	echo "Replacing encrypted data with data dump"
+	foo=$(dd seek=4096 bs=1 conv=notrunc if="$WorkDir/dump.bin" of="$WorkDir/$AppName/$AppExecCur" 2>&1> /dev/null)
+	rm "$WorkDir/dump.bin"
+	
+	echo "Signing the application"
+	foo=$(ldid -s "$WorkDir/$AppName/$AppExecCur" 2>&1> /dev/null)	
+done
+
+if [ ! $LipoFail ]; then
+	echo
+else
+	echo 
+	echo "Combining both parts into a fat binary"
+	lipo -create "$WorkDir/$AppName/$AppExec-armv6" "$WorkDir/$AppName/$AppExec-armv7" -output "$WorkDir/$AppName/$AppExec"
+	rm "$WorkDir/$AppName/$AppExec-armv6"
+	rm "$WorkDir/$AppName/$AppExec-armv7"
+fi
+
+#plutil -key 'SignerIdentity' -value 'Apple iPhone OS Application Signing' "$WorkDir/$AppName/Info.plist" 2>&1> /dev/null
+plutil -binary "$WorkDir/$AppName/Info.plist" 2>&1> /dev/null
+
+if [ -e "$WorkDir/$AppName/SC_Info" ]; then
+	echo "Removing SC_Info"
+	rm -fr "$WorkDir/$AppName/SC_Info"
+fi
+
+if [ -e "$WorkDir/$AppName/_CodeSignature" ]; then
+	echo "Removing _CodeSignature"
+	rm -fr "$WorkDir/$AppName/_CodeSignature"
+fi
+
+if [ -h "$WorkDir/$AppName/CodeResources" ]; then
+	echo "Removing CodeResources"
+	rm -fr "$WorkDir/$AppName/CodeResources"
+fi
+
+if [ -e "$WorkDir/$AppName/ResourceRules.plist" ]; then
+	echo "Removing ResourceRules.plist"
+	rm -fr "$WorkDir/$AppName/ResourceRules.plist"
+fi
+
+if [ ! $CrackerName = "Anonymous" ]; then
+	echo "Adding Credits"
+	echo "Cracked by $CrackerName" >> "$WorkDir/$AppName/$CreditFile"
+fi
+
+echo "Building .ipa"
+
+mkdir -p "$WorkDir/Payload"
+if [ ! -e "$WorkDir/Payload" ]; then
+	echo "Failed to create Payload directory"
+	rm -fr "$WorkDir"
+	exit 1
+fi
+mv "$WorkDir/$AppName" "$WorkDir/Payload/"
+
+echo "Copying iTunesArtwork"
+
+if [ -e "$AppPath/iTunesArtwork" ]; then
+	cp -a "$AppPath/iTunesArtwork" "$WorkDir/"
+else
+	echo "Unable to find iTunesArtwork"
+fi
+
+echo "Compressing the .ipa"
+
+if [ $CrackerName = "Anonymous" ]; then
+	IPAName=$NewAppDir/$(echo $AppDisplayName | sed -e "s: :_:g")-v$AppVer.ipa
+else
+	IPAName=$NewAppDir/$(echo $AppDisplayName | sed -e "s: :_:g")-v$AppVer-$CrackerName.ipa
+fi
+
+cd "$WorkDir"
+zip -m -r "$IPAName" * 2>&1> /dev/null
+cd - 2>&1> /dev/null
+if [ ! -e "$IPAName" ]; then
+	echo "Failed to compress the .ipa"
+	rm -fr "$WorkDir"
+	exit 1
+fi
+
+echo "Removing temporary files"
+rm -rf "$WorkDir"
+
+echo "Done"
+echo "Created cracked .ipa at $IPAName"
+
