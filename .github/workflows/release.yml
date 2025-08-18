@@ -35,9 +35,8 @@ jobs:
           # 2. Build Packages, nếu fail thì xoá .deb lỗi rồi retry
           until dpkg-scanpackages -m . /dev/null > Packages 2> scan.log; do
             echo "⚠️ dpkg-scanpackages failed, removing broken .deb ..."
-            grep '\.deb' scan.log | while read -r line; do
-              BAD_DEB=$(echo "$line" | grep -oE '[^ ]+\.deb' || true)
-              if [ -n "$BAD_DEB" ]; then
+            grep -oE '\./[^ ]+\.deb' scan.log | while IFS= read -r BAD_DEB; do
+              if [ -n "$BAD_DEB" ] && [ -f "$BAD_DEB" ]; then
                 echo "❌ Removing invalid package: $BAD_DEB"
                 rm -f "$BAD_DEB"
               fi
