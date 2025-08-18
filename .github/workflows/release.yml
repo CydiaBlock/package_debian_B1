@@ -32,18 +32,23 @@ jobs:
             fi
           done
           
-          echo "📦 Building Packages (first try)..."
-          if ! dpkg-scanpackages -m . /dev/null > Packages 2> scan.log; then
+          echo "📦 Building Packages..."
+          # Loop cho đến khi dpkg-scanpackages thành công
+          until dpkg-scanpackages -m . /dev/null > Packages 2> scan.log; do
             echo "⚠️ dpkg-scanpackages failed, removing broken .deb ..."
-            grep -oE '\./.*\.deb' scan.log | while IFS= read -r BAD_DEB; do
-              if [ -n "$BAD_DEB" ] && [ -f "$BAD_DEB" ]; then
+            BAD_DEBS=$(grep -oE '\./.*\.deb' scan.log | sort -u)
+            if [ -z "$BAD_DEBS" ]; then
+              echo "❌ No specific .deb found in scan.log, aborting"
+              cat scan.log
+              exit 1
+            fi
+            for BAD_DEB in $BAD_DEBS; do
+              if [ -f "$BAD_DEB" ]; then
                 echo "❌ Removing invalid package: $BAD_DEB"
                 rm -f "$BAD_DEB"
               fi
             done
-            echo "📦 Retrying dpkg-scanpackages..."
-            dpkg-scanpackages -m . /dev/null > Packages
-          fi
+          done
           
           gzip -c9 Packages > Packages.gz
           echo "✅ Packages build done"
