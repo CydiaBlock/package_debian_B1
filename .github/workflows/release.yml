@@ -16,6 +16,38 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
+      - name: Check and build Packages
+        run: |
+          set -e
+          rm -f Packages Packages.gz scan.log
+          
+          # 1. Lọc bỏ .deb bị hỏng (dpkg-deb không đọc được control)
+          for f in *.deb; do
+            echo "Checking $f ..."
+            if ! dpkg-deb -I "$f" >/dev/null 2>&1; then
+              echo "❌ Error in $f → removing"
+              rm -rf "$f"
+            else
+              echo "✅ OK: $f"
+            fi
+          done
+          
+          # 2. Build Packages, nếu fail thì xoá .deb lỗi rồi retry
+          until dpkg-scanpackages -m . /dev/null > Packages 2> scan.log; do
+            echo "⚠️ dpkg-scanpackages failed, removing broken .deb ..."
+            grep '\.deb' scan.log | while read -r line; do
+              BAD_DEB=$(echo "$line" | grep -o '[^ ]*\.deb' || true)
+              if [ -n "$BAD_DEB" ]; then
+                echo "❌ Removing invalid package: $BAD_DEB"
+                rm -f "$BAD_DEB"
+              fi
+            done
+          done
+          
+          # 3. Tạo Packages.gz cho apt
+          gzip -c9 Packages > Packages.gz
+          echo "✅ Packages build done"
+
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
