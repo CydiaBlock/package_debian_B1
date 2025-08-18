@@ -21,29 +21,24 @@ jobs:
           set -e
           rm -f Packages Packages.gz scan.log
           
-          # 1. Lọc bỏ .deb bị hỏng (dpkg-deb không đọc được control)
+          echo "🔎 Checking all .deb files..."
           find . -type f -name "*.deb" -print0 | while IFS= read -r -d '' f; do
             echo "Checking $f ..."
             if ! dpkg-deb -I "$f" >/dev/null 2>&1; then
-              echo "❌ Error in $f → removing"
+              echo "❌ Invalid package: $f → removing"
               rm -f "$f"
             else
               echo "✅ OK: $f"
             fi
           done
           
-          # 2. Build Packages, nếu fail thì xoá .deb lỗi rồi retry
-          until dpkg-scanpackages -m . /dev/null > Packages 2> scan.log; do
-            echo "⚠️ dpkg-scanpackages failed, removing broken .deb ..."
-            grep -oE '\./[^ ]+\.deb' scan.log | while IFS= read -r BAD_DEB; do
-              if [ -n "$BAD_DEB" ] && [ -f "$BAD_DEB" ]; then
-                echo "❌ Removing invalid package: $BAD_DEB"
-                rm -f "$BAD_DEB"
-              fi
-            done
-          done
+          echo "📦 Building Packages..."
+          if ! dpkg-scanpackages -m . /dev/null > Packages 2> scan.log; then
+            echo "❌ dpkg-scanpackages failed. See scan.log:"
+            cat scan.log
+            exit 1
+          fi
           
-          # 3. Tạo Packages.gz cho apt
           gzip -c9 Packages > Packages.gz
           echo "✅ Packages build done"
 
