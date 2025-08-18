@@ -32,11 +32,17 @@ jobs:
             fi
           done
           
-          echo "📦 Building Packages..."
+          echo "📦 Building Packages (first try)..."
           if ! dpkg-scanpackages -m . /dev/null > Packages 2> scan.log; then
-            echo "❌ dpkg-scanpackages failed. See scan.log:"
-            cat scan.log
-            exit 1
+            echo "⚠️ dpkg-scanpackages failed, removing broken .deb ..."
+            grep -oE '\./.*\.deb' scan.log | while IFS= read -r BAD_DEB; do
+              if [ -n "$BAD_DEB" ] && [ -f "$BAD_DEB" ]; then
+                echo "❌ Removing invalid package: $BAD_DEB"
+                rm -f "$BAD_DEB"
+              fi
+            done
+            echo "📦 Retrying dpkg-scanpackages..."
+            dpkg-scanpackages -m . /dev/null > Packages
           fi
           
           gzip -c9 Packages > Packages.gz
